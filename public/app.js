@@ -25,6 +25,7 @@ const state = {
   dialogueSegs:       [],
   dialogueStopped:    false,
   dialogueTimer:      null,
+  _iosStop:           null,
 };
 
 // iOS 判定
@@ -622,8 +623,45 @@ function stopSpeech() {
 }
 
 // =====================================================================
-//  録音・採点
+//  録音・採点（OpenAI Whisper API）
 // =====================================================================
+
+// 採点機能フラグ: false の間は録音のみ動作（Whisper API呼出なし＝コストゼロ）
+// サブスク有効ユーザーのみ採点API（/api/score）を呼べる
+const SCORING_ENABLED = true;
+
+// iOS 用: Float32Array PCM バッファ群 → WAV ArrayBuffer
+function _pcmToWAV(bufs, sr) {
+  const total = bufs.reduce((n, b) => n + b.length, 0);
+  const ab = new ArrayBuffer(44 + total * 2);
+  const dv = new DataView(ab);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0,'RIFF'); dv.setUint32(4, 36 + total*2, true); ws(8,'WAVE');
+  ws(12,'fmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,sr,true); dv.setUint32(28,sr*2,true); dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  ws(36,'data'); dv.setUint32(40,total*2,true);
+  let off = 44;
+  for (const b of bufs) {
+    for (let i = 0; i < b.length; i++, off += 2) {
+      const s = Math.max(-1, Math.min(1, b[i]));
+      dv.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+  }
+  return ab;
+}
+
+// 録音完了後: 新しい <audio> 要素を生成して差し替え + 再生エリアを表示
+function _showAudio(blob) {
+  const url   = URL.createObjectURL(blob);
+  const fresh = document.createElement('audio');
+  fresh.id = 'recorded-audio'; fresh.controls = true; fresh.src = url;
+  const old = el.recordedAudio;
+  if (old?.src?.startsWith('blob:')) try { URL.revokeObjectURL(old.src); } catch {}
+  if (old?.parentNode) old.replaceWith(fresh); else el.audioArea.appendChild(fresh);
+  el.recordedAudio = fresh;
+  el.audioArea.classList.remove('hidden');
+}
+
 el.recordBtn.addEventListener('click', toggleRecord);
 
 function toggleRecord() {
@@ -632,6 +670,9 @@ function toggleRecord() {
 }
 
 async function startRecording() {
+  if (!state.currentText) return;
+  stopSpeech();
+
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch {
@@ -639,14 +680,51 @@ async function startRecording() {
     return;
   }
 
-  state.isRecording = true;
-  state.audioChunks = [];
+  state.isRecording    = true;
+  state.lastTranscript = '';
+  state.lastScore      = null;
+  state.audioChunks    = [];
   el.recordBtn.classList.add('recording');
   el.recordBtn.textContent = '⏹ 停止';
   el.recStatus.textContent = '🔴 録音中…';
   el.audioArea.classList.add('hidden');
   el.scoreArea.classList.add('hidden');
 
+  // ── iOS: Web Audio API → WAV ─────────────────────────────────────
+  if (_isIOS) {
+    try {
+      const ctx    = new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.resume().catch(() => {});
+      const source = ctx.createMediaStreamSource(stream);
+      const proc   = ctx.createScriptProcessor(4096, 1, 1);
+      const sink   = ctx.createGain();
+      sink.gain.value = 0;
+      const bufs = [];
+      proc.onaudioprocess = e => {
+        if (state.isRecording) bufs.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+      state._iosStop = () => {
+        try { proc.disconnect(); source.disconnect(); sink.disconnect(); } catch {}
+        ctx.close().catch(() => {});
+        stream.getTracks().forEach(t => t.stop());
+        if (!bufs.length) return;
+        const blob = new Blob([_pcmToWAV(bufs, ctx.sampleRate)], { type: 'audio/wav' });
+        _finishRecording(blob);
+      };
+    } catch (e) {
+      showToast('録音エラー: ' + e.message, true);
+      stream.getTracks().forEach(t => t.stop());
+      state.isRecording = false;
+      el.recordBtn.classList.remove('recording');
+      el.recordBtn.textContent = '🎤 録音';
+      el.recStatus.textContent = '';
+      return;
+    }
+    return;
+  }
+
+  // ── MediaRecorder（非iOS）──────────────────────────────────────────
   const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
   state.mediaRecorder = new MediaRecorder(stream, { mimeType });
   state.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) state.audioChunks.push(e.data); };
@@ -655,45 +733,79 @@ async function startRecording() {
 }
 
 function stopRecording() {
-  if (state.mediaRecorder && state.isRecording) {
-    state.mediaRecorder.stop();
-    state.isRecording = false;
-    el.recordBtn.classList.remove('recording');
-    el.recordBtn.textContent = '🎤 録音';
-    el.recStatus.textContent = '';
+  if (!state.isRecording) return;
+  state.isRecording = false;
+  el.recordBtn.classList.remove('recording');
+  el.recordBtn.textContent = '🎤 録音';
+  el.recStatus.textContent = '';
+
+  if (state.recognition) { try { state.recognition.stop(); } catch {} state.recognition = null; }
+
+  // iOS path: _iosStop が設定されていれば呼び出し
+  if (state._iosStop) {
+    const fn = state._iosStop; state._iosStop = null; fn();
+    return;
   }
+
+  // MediaRecorder path
+  if (state.mediaRecorder?.state !== 'inactive') try { state.mediaRecorder.stop(); } catch {}
 }
 
 function finishRecording() {
-  const blob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType });
-  const url  = URL.createObjectURL(blob);
-  el.recordedAudio.src = url;
-  el.audioArea.classList.remove('hidden');
-
-  // 簡易採点（SpeechRecognition）
-  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    scoreWithSpeechRecognition(blob);
-  }
+  const blob = new Blob(state.audioChunks, { type: state.mediaRecorder?.mimeType || 'audio/webm' });
+  _finishRecording(blob);
 }
 
-function scoreWithSpeechRecognition(blob) {
-  const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
-  const rec = new SR();
-  rec.lang = 'en-US';
-  rec.continuous = false;
-  rec.interimResults = false;
+// 録音完了後: 表示 → (有効なら) Whisper採点
+async function _finishRecording(blob) {
+  _showAudio(blob);
+  if (SCORING_ENABLED) await scoreWithWhisper(blob);
+}
 
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  rec.start();
-  audio.play().catch(() => {});
+async function scoreWithWhisper(blob) {
+  if (!blob || !state.currentText) return;
 
-  rec.onresult = evt => {
-    const transcript = evt.results[0][0].transcript.toLowerCase();
-    const score = calcScore(state.currentText, transcript);
+  // スコアエリアにローディング表示
+  el.scoreArea.classList.remove('hidden');
+  el.scoreNum.textContent = '…';
+  el.scoreMsg.textContent = '採点中...';
+  const circ = 2 * Math.PI * 25;
+  if (el.ringFill) el.ringFill.style.strokeDashoffset = circ;
+
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    const mimeType = blob.type || 'audio/webm';
+    const resp = await fetch('/api/score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: base64, mimeType, reference: state.currentText }),
+    });
+    if (resp.status === 401) {
+      el.scoreNum.textContent = '?';
+      el.scoreMsg.textContent = 'ログインが必要です';
+      return;
+    }
+    if (resp.status === 403) {
+      el.scoreNum.textContent = '?';
+      el.scoreMsg.textContent = '採点機能はサブスク会員限定です';
+      return;
+    }
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    const { score, transcript } = await resp.json();
     showScore(score, transcript);
-  };
-  rec.onerror = () => {};
+  } catch (err) {
+    console.warn('[scoreWithWhisper]', err.message, 'blob size=', blob.size, 'type=', blob.type);
+    el.scoreNum.textContent = '?';
+    el.scoreMsg.textContent = '採点失敗: ' + (err.message || '通信エラー') + '（再録音してください）';
+  }
 }
 
 function calcScore(original, spoken) {

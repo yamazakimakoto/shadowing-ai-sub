@@ -10,6 +10,7 @@ import generateRoutes     from './routes/generate.js';
 import explainRoutes      from './routes/explain.js';
 import savedRoutes        from './routes/saved.js';
 import ttsRoutes          from './routes/tts.js';
+import scoreRoutes        from './routes/score.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,7 +19,8 @@ const app = express();
 app.use('/api/sub/webhook', express.raw({ type: 'application/json' }));
 
 // ── 共通ミドルウェア ──────────────────────────────────────────────
-app.use(express.json());
+// 採点用 base64音声 (iOS WAVは数十秒で~9MB) を受け取れるよう limit を上げる
+app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.use(express.static(join(__dirname, 'public')));
 
@@ -29,6 +31,7 @@ app.use('/api/generate', generateRoutes);
 app.use('/api/explain',  explainRoutes);
 app.use('/api/saved',    savedRoutes);
 app.use('/api/tts',      ttsRoutes);
+app.use('/api/score',    scoreRoutes);
 
 // ── API ステータス ────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
