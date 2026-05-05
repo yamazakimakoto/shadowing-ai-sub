@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>English Shadowing AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── ヘッダー ──────────────────────────────────────────────── -->
+<header class="app-header">
+  <div class="header-inner">
+    <div class="app-logo">✨ English Shadowing AI<span>サブスク版</span></div>
+    <!-- ユーザーメニュー（ログイン前は「ログイン」ボタン） -->
+    <div id="header-auth-area">
+      <button class="btn-primary" id="header-login-btn" style="padding:6px 14px;font-size:.83rem">ログイン / 登録</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── ナビゲーション ─────────────────────────────────────────── -->
+<nav class="app-nav" id="app-nav">
+  <button class="nav-btn active" data-tab="practice">🎤 練習</button>
+  <button class="nav-btn" data-tab="history">📚 保存</button>
+  <button class="nav-btn" data-tab="subscription">💳 プラン</button>
+</nav>
+
+<!-- ── メインコンテンツ ───────────────────────────────────────── -->
+<main class="app-main">
+
+  <!-- ━━ 練習タブ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <div id="tab-practice" class="tab-content active">
+
+    <!-- 未ログイン / サブスクなし ゲート画面 -->
+    <div id="gate-practice" class="gate-screen hidden">
+      <div class="gate-icon">🔒</div>
+      <h2>ログインが必要です</h2>
+      <p>練習機能を使うにはログインしてください。</p>
+      <button class="btn-primary" onclick="openAuth('login')">ログイン / 登録</button>
+    </div>
+
+    <!-- サブスク必要ゲート画面 -->
+    <div id="gate-sub" class="gate-screen hidden">
+      <div class="gate-icon">✨</div>
+      <h2>サブスクリプションが必要です</h2>
+      <p>月額 <strong>¥700</strong> で30件の練習テキスト生成・全機能が使えます。</p>
+      <button class="btn-primary" id="gate-sub-btn" onclick="startCheckout()">プランに申し込む</button>
+    </div>
+
+    <!-- メイン練習エリア -->
+    <div id="practice-content" class="hidden">
+
+      <!-- テキスト生成 -->
+      <div class="card">
+        <div class="card-title">テキスト生成</div>
+
+        <!-- 入力タブ -->
+        <div class="input-tabs">
+          <button class="input-tab active" data-input="ai">✨ AI生成</button>
+          <button class="input-tab" data-input="manual">✏️ 手動入力</button>
+        </div>
+
+        <!-- AI生成パネル -->
+        <div id="input-ai" class="input-panel active">
+          <input type="text" id="theme-input" placeholder="テーマを入力（例: 空港での会話）">
+          <div class="suggest-chips" id="suggest-chips">
+            <button class="suggest-chip">時事問題</button>
+            <button class="suggest-chip">最近の話題</button>
+            <button class="suggest-chip">健康</button>
+            <button class="suggest-chip">旅行</button>
+            <button class="suggest-chip">レジャー</button>
+            <button class="suggest-chip">スポーツ</button>
+            <button class="suggest-chip">レストラン</button>
+          </div>
+          <div class="style-row">
+            <label>スタイル</label>
+            <select id="style-select">
+              <option value="dialogue">💬 ダイアログ</option>
+              <option value="monologue">📖 モノローグ</option>
+            </select>
+          </div>
+          <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <button class="btn-primary" id="generate-btn">
+              <span class="btn-normal">✨ 生成</span>
+              <span class="btn-loading hidden"><span class="spinner"></span> 生成中…</span>
+            </button>
+            <div id="gen-quota" style="font-size:.82rem;color:#64748b"></div>
+          </div>
+        </div>
+
+        <!-- 手動入力パネル -->
+        <div id="input-manual" class="input-panel">
+          <textarea id="manual-text" placeholder="英語テキストをここに入力してください…" rows="4"></textarea>
+          <button class="btn-primary" id="save-manual-btn" style="margin-top:8px">✏️ セット</button>
+        </div>
+      </div>
+
+      <!-- テキスト表示 -->
+      <div class="card">
+        <div class="card-title">テキスト</div>
+
+        <!-- ダイアログコントロール -->
+        <div id="dialogue-controls" class="dialogue-controls hidden">
+          <div class="play-mode-btns">
+            <button class="play-mode-btn active" data-mode="full">🔊 全体読み上げ</button>
+            <button class="play-mode-btn" data-mode="practice">🎤 役割練習</button>
+          </div>
+          <div id="role-selector" class="role-selector hidden">
+            <label>自分のパート：</label>
+            <button class="role-btn" data-role="A">A</button>
+            <button class="role-btn" data-role="B">B</button>
+          </div>
+          <div id="role-hint" class="role-hint hidden"></div>
+        </div>
+
+        <div id="text-display" class="text-display">
+          <p class="placeholder-text">上でテキストを生成または入力してください</p>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn-secondary" id="explain-btn" disabled>💡 解説</button>
+          <button class="btn-secondary" id="save-text-btn" disabled>📌 保存</button>
+        </div>
+      </div>
+
+      <!-- 音声コントロール -->
+      <div class="card">
+        <div class="card-title">音声コントロール</div>
+        <div class="tts-controls">
+          <div class="tts-row">
+            <button class="btn-play" id="play-btn" disabled>▶ 再生</button>
+            <button class="btn-stop" id="stop-btn" disabled>⏹</button>
+            <button class="btn-repeat" id="repeat-btn" disabled>🔁 繰り返し</button>
+          </div>
+          <div class="speed-control">
+            <span>速度</span>
+            <input type="range" id="speed-slider" min="0.5" max="1.5" step="0.1" value="0.9">
+            <span class="speed-val" id="speed-value">0.9</span>
+          </div>
+          <div class="voice-row">
+            <span>音声</span>
+            <select id="voice-select"><option value="">デフォルト</option></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 録音・スコア -->
+      <div class="card">
+        <div class="card-title">録音・発音チェック</div>
+        <div class="record-row">
+          <button class="btn-record" id="record-btn" disabled>🎤 録音</button>
+          <span id="record-label" class="rec-status"></span>
+        </div>
+        <p id="rec-status" class="rec-status mt8"></p>
+        <div id="audio-playback-area" class="hidden" style="margin-top:10px">
+          <audio id="recorded-audio" controls style="width:100%"></audio>
+        </div>
+        <div id="score-area" class="score-area hidden">
+          <div class="score-ring-wrap">
+            <div class="score-ring">
+              <svg viewBox="0 0 56 56" width="64" height="64">
+                <circle class="ring-bg" cx="28" cy="28" r="25"/>
+                <circle class="ring-fill" id="ring-fill" cx="28" cy="28" r="25"/>
+              </svg>
+              <div class="score-num" id="score-num">0</div>
+            </div>
+            <div id="score-msg" class="score-msg"></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /practice-content -->
+  </div><!-- /tab-practice -->
+
+  <!-- ━━ 保存タブ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <div id="tab-history" class="tab-content">
+    <div id="gate-history" class="gate-screen hidden">
+      <div class="gate-icon">🔒</div>
+      <h2>ログインが必要です</h2>
+      <p>保存したテキストを見るにはログインしてください。</p>
+      <button class="btn-primary" onclick="openAuth('login')">ログイン / 登録</button>
+    </div>
+
+    <div id="history-content" class="hidden">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="card-title" style="margin-bottom:0">保存済みテキスト</div>
+          <button class="btn-ghost" id="clear-all-btn" style="font-size:.8rem;padding:5px 10px">全削除</button>
+        </div>
+        <div id="saved-list" class="saved-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ━━ プランタブ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <div id="tab-subscription" class="tab-content">
+    <div id="gate-sub-tab" class="gate-screen hidden">
+      <div class="gate-icon">🔒</div>
+      <h2>ログインが必要です</h2>
+      <p>プラン情報を確認するにはログインしてください。</p>
+      <button class="btn-primary" onclick="openAuth('login')">ログイン / 登録</button>
+    </div>
+
+    <div id="sub-content" class="hidden">
+      <!-- アクティブ時 -->
+      <div id="sub-active-view" class="hidden">
+        <div class="card sub-card">
+          <div class="card-title">プラン情報</div>
+          <div class="sub-info">
+            <div class="sub-info-row">
+              <span class="sub-info-label">ステータス</span>
+              <span class="badge-active">✅ 有効</span>
+            </div>
+            <div class="sub-info-row">
+              <span class="sub-info-label">有効期限</span>
+              <span class="sub-info-value" id="sub-end-date">—</span>
+            </div>
+            <div class="sub-info-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+              <span class="sub-info-label">今月の生成件数</span>
+              <div style="display:flex;align-items:center;width:100%;gap:8px">
+                <div class="quota-bar"><div class="quota-fill" id="quota-fill"></div></div>
+                <span id="quota-text" style="font-size:.85rem;font-weight:600;white-space:nowrap"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">サブスクリプション管理</div>
+          <p style="font-size:.88rem;color:#64748b;margin-bottom:12px">
+            支払い方法の変更・解約は以下のボタンから行えます。
+          </p>
+          <button class="btn-secondary" id="portal-btn">💳 支払い管理ポータル</button>
+        </div>
+      </div>
+
+      <!-- 未加入時 -->
+      <div id="sub-inactive-view" class="hidden">
+        <div class="sub-banner">
+          <h3>✨ English Shadowing AI</h3>
+          <p>AIが生成した英会話テキストでシャドウイング練習</p>
+          <div class="price">¥700<span>/月</span></div>
+          <p style="margin-bottom:14px;opacity:.8;font-size:.82rem">初月から即日利用可能</p>
+          <button class="btn-primary full" id="checkout-btn" style="background:#fff;color:#0ea5e9">
+            今すぐ始める →
+          </button>
+        </div>
+        <div class="card">
+          <div class="card-title">プランに含まれるもの</div>
+          <ul style="list-style:none;display:flex;flex-direction:column;gap:10px">
+            <li style="display:flex;gap:8px"><span>✅</span><span>AIによる英会話テキスト生成 <strong>30件/月</strong></span></li>
+            <li style="display:flex;gap:8px"><span>✅</span><span>テキストの保存・管理（最大200件）</span></li>
+            <li style="display:flex;gap:8px"><span>✅</span><span>日本語訳 + フレーズ解説</span></li>
+            <li style="display:flex;gap:8px"><span>✅</span><span>TTS音声読み上げ・速度調整</span></li>
+            <li style="display:flex;gap:8px"><span>✅</span><span>発音採点（録音機能）</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main><!-- /app-main -->
+
+<!-- ━━ 解説モーダル ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<div id="explain-modal" class="modal-overlay hidden">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <div class="modal-title">💡 フレーズ解説</div>
+      <button class="btn-close close-modal" data-modal="explain-modal">✕</button>
+    </div>
+    <div id="explain-source" class="explain-source hidden"></div>
+    <div id="explain-loading" class="explain-loading hidden">✨ 解説を生成中…</div>
+    <div id="explain-translation" class="explain-translation hidden"></div>
+    <div id="explain-list"></div>
+    <button id="regen-explain-btn" class="btn-regen hidden">🔄 再生成</button>
+  </div>
+</div>
+
+<!-- ━━ レビューモーダル ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<div id="review-modal" class="modal-overlay hidden">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <div class="modal-title">📖 保存テキスト</div>
+      <button class="btn-close close-modal" data-modal="review-modal">✕</button>
+    </div>
+    <div id="review-meta" class="review-meta"></div>
+    <div id="review-text" class="review-text"></div>
+    <div class="review-actions">
+      <button class="btn-primary" id="review-play-btn">▶ 読み上げ</button>
+      <button class="btn-secondary" id="review-practice-btn">🎤 この文で練習</button>
+    </div>
+    <div id="review-explain-area"></div>
+  </div>
+</div>
+
+<!-- ━━ 認証モーダル ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<div id="auth-modal" class="auth-modal-overlay hidden">
+  <div class="auth-modal">
+    <!-- ログイン画面 -->
+    <div id="auth-login-view">
+      <div class="auth-title">✨ ログイン</div>
+      <div class="auth-sub">アカウントにログインしてください</div>
+      <div id="auth-login-error" class="auth-error hidden"></div>
+      <div class="auth-form">
+        <div>
+          <label>メールアドレス</label>
+          <input type="email" id="login-email" placeholder="email@example.com" autocomplete="email">
+        </div>
+        <div>
+          <label>パスワード</label>
+          <input type="password" id="login-password" placeholder="パスワード" autocomplete="current-password">
+        </div>
+        <button class="btn-primary full" id="login-btn">ログイン</button>
+      </div>
+      <div id="resend-verify-area" class="hidden" style="margin-top:10px;text-align:center">
+        <span class="auth-link" id="resend-verify-btn">確認メールを再送する</span>
+      </div>
+      <div class="auth-toggle">
+        アカウントをお持ちでない方は
+        <span class="auth-link" id="go-register">新規登録</span>
+      </div>
+    </div>
+
+    <!-- 新規登録画面 -->
+    <div id="auth-register-view" class="hidden">
+      <div class="auth-title">✨ 新規登録</div>
+      <div class="auth-sub">アカウントを作成してください</div>
+      <div id="auth-register-error" class="auth-error hidden"></div>
+      <div id="auth-register-success" class="hidden" style="background:#dcfce7;color:#16a34a;border-radius:8px;padding:12px;font-size:.88rem;margin-bottom:8px"></div>
+      <div class="auth-form" id="register-form">
+        <div>
+          <label>お名前</label>
+          <input type="text" id="register-name" placeholder="山田 太郎" autocomplete="name">
+        </div>
+        <div>
+          <label>メールアドレス</label>
+          <input type="email" id="register-email" placeholder="email@example.com" autocomplete="email">
+        </div>
+        <div>
+          <label>パスワード（6文字以上）</label>
+          <input type="password" id="register-password" placeholder="パスワード" autocomplete="new-password">
+        </div>
+        <button class="btn-primary full" id="register-btn">登録する</button>
+      </div>
+      <div class="auth-toggle">
+        既にアカウントをお持ちの方は
+        <span class="auth-link" id="go-login">ログイン</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── トースト ─────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<!-- ── スクリプト ─────────────────────────────────────────────── -->
+<script src="auth.js"></script>
+<script src="subscription.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
