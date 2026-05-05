@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "英会話シャドウイング AI版（サブスクリプション）",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
