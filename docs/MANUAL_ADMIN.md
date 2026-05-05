@@ -101,8 +101,10 @@ db.prepare('UPDATE subscriptions SET gen_used = 0').run();
 ### Webhook URL
 
 ```
-https://<your-render-app>.onrender.com/api/sub/webhook
+https://shadowing-ai-web.onrender.com/api/sub/webhook
 ```
+
+> **命名注記:** GitHub リポジトリは `shadowing-ai-sub` だが、Render.com の Service Name と URL は当初の `shadowing-ai-web` を継続利用している（URL変更によるユーザー再周知を避けるため）。リポジトリのコードと URL の名前が異なる点に注意。
 
 イベント: `customer.subscription.created`, `updated`, `deleted`, `invoice.payment_failed`
 

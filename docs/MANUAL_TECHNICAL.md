@@ -273,11 +273,27 @@ npm run dev        # ウォッチモード
 
 ## Render.com デプロイ
 
+### 本番環境
+
+| 項目 | 値 |
+|------|-----|
+| サービスURL | https://shadowing-ai-web.onrender.com |
+| GitHub repo | https://github.com/yamazakimakoto/shadowing-ai-sub |
+| Render Service Name | `shadowing-ai-web`（URL継続のため旧名のまま）|
+
+### デプロイ手順
+
 1. GitHub リポジトリにプッシュ（`data/` `shadowing.db*` は gitignore済み）
-2. Render.com → New Web Service → リポジトリ選択
+2. Render.com 既存サービス → 自動デプロイが走る（main ブランチ）
 3. Persistent Disk: `/data` 1GB（DBとTTSキャッシュ用）
 4. Environment Variables を設定
-5. Stripe Webhook URL を Render の URL + `/api/sub/webhook` に設定
+5. Stripe Webhook URL: `https://shadowing-ai-web.onrender.com/api/sub/webhook`
+
+### Node バージョン
+
+`better-sqlite3` のネイティブビルドのため Node 20+ 必須:
+- `package.json` の `engines.node`
+- `.node-version` ファイル（Render が優先的に読む）
 
 ---
 
