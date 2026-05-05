@@ -9,6 +9,7 @@ import subscriptionRoutes from './routes/subscription.js';
 import generateRoutes     from './routes/generate.js';
 import explainRoutes      from './routes/explain.js';
 import savedRoutes        from './routes/saved.js';
+import ttsRoutes          from './routes/tts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/sub',  subscriptionRoutes);
 app.use('/api/generate', generateRoutes);
 app.use('/api/explain',  explainRoutes);
 app.use('/api/saved',    savedRoutes);
+app.use('/api/tts',      ttsRoutes);
 
 // ── API ステータス ────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {

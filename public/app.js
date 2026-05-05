@@ -106,27 +106,60 @@ window.showToast = function(msg, isError = false) {
   setTimeout(() => t.classList.remove('show'), 2800);
 };
 
-// ── Voices ────────────────────────────────────────────────────────────
-let voices = [];
-function loadVoices() {
-  voices = speechSynthesis.getVoices();
-  const eng = voices.filter(v => v.lang.startsWith('en'));
-  el.voiceSelect.innerHTML = '';
-  if (!eng.length) { el.voiceSelect.innerHTML = '<option value="">デフォルト</option>'; return; }
-  eng.forEach((v, i) => {
-    const o = document.createElement('option');
-    o.value = i; o.textContent = `${v.name} (${v.lang})`;
-    el.voiceSelect.appendChild(o);
+// ── OpenAI TTS キャッシュ ─────────────────────────────────────────────
+// key: "${voice}:${text}" → blob URL
+const ttsCache = new Map();
+let currentAudio   = null;   // 現在再生中の Audio オブジェクト
+let ttsAbort       = null;   // AbortController（フェッチ中断用）
+
+/** TTS音声をフェッチ（キャッシュあれば再利用） */
+async function fetchTTS(text, voice) {
+  const key = `${voice}:${text}`;
+  if (ttsCache.has(key)) return ttsCache.get(key);
+
+  const controller = new AbortController();
+  ttsAbort = controller;
+
+  const res = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+    signal: controller.signal,
   });
-  const samIdx  = eng.findIndex(v => v.name === 'Samantha');
-  const enUSIdx = eng.findIndex(v => v.lang === 'en-US');
-  el.voiceSelect.value = samIdx >= 0 ? samIdx : enUSIdx >= 0 ? enUSIdx : 0;
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || 'TTS生成エラー');
+  }
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  ttsCache.set(key, url);
+  return url;
 }
-speechSynthesis.addEventListener('voiceschanged', loadVoices);
-loadVoices();
-function getVoice() {
-  const eng = voices.filter(v => v.lang.startsWith('en'));
-  return eng[parseInt(el.voiceSelect.value)] || null;
+
+/** Audio を再生して終わるまで待つ Promise */
+function playAudio(url, rate) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(url);
+    audio.playbackRate = Math.max(0.5, Math.min(2.0, rate));
+    currentAudio = audio;
+    audio.addEventListener('ended',  () => { currentAudio = null; resolve(); });
+    audio.addEventListener('error',  () => { currentAudio = null; reject(new Error('audio error')); });
+    audio.play().catch(reject);
+  });
+}
+
+/** Audio の再生時間を取得 */
+function getAudioDuration(url) {
+  return new Promise(resolve => {
+    const audio = new Audio(url);
+    audio.addEventListener('loadedmetadata', () => resolve(audio.duration), { once: true });
+    audio.addEventListener('error', () => resolve(3), { once: true });
+  });
+}
+
+/** ボイスセレクトの値 */
+function getTTSVoice() {
+  return el.voiceSelect?.value || 'nova';
 }
 
 // ── Navigation ────────────────────────────────────────────────────────
@@ -418,12 +451,13 @@ function updateRoleHint() {
 }
 
 // =====================================================================
-//  音声合成（TTS）
+//  音声再生（OpenAI TTS）
 // =====================================================================
 el.playBtn.addEventListener('click', () => {
-  if (state.isPlaying) {
-    if (speechSynthesis.paused) resumeSpeech();
-    else pauseSpeech();
+  if (state.isPaused) {
+    resumeSpeech();
+  } else if (state.isPlaying) {
+    pauseSpeech();
   } else {
     startSpeech();
   }
@@ -434,143 +468,121 @@ el.repeatBtn.addEventListener('click', () => {
   el.repeatBtn.classList.toggle('active', state.isRepeating);
 });
 
+function setPlayBtnLoading(on) {
+  el.playBtn.disabled = on;
+  el.playBtn.textContent = on ? '⏳ 読み込み中…' : '▶ 再生';
+}
+
 function startSpeech() {
   if (!state.currentText) return;
   stopSpeech();
-  state.isPlaying = true;
   state.dialogueStopped = false;
-  el.playBtn.textContent = '⏸ 一時停止';
 
   if (state.dialogueMode) {
     startDialogueSpeech();
     return;
   }
 
-  const utt = new SpeechSynthesisUtterance(state.currentText);
-  utt.rate = parseFloat(el.speedSlider.value);
-  utt.lang = 'en-US';
-  const voice = getVoice();
-  if (voice) utt.voice = voice;
-  state.utterance = utt;
-
-  utt.addEventListener('boundary', evt => {
-    if (evt.name !== 'word') return;
-    state.words.forEach(w => w.classList.remove('hl-word'));
-    const idx = evt.charIndex;
-    const hit = state.words.find(w =>
-      parseInt(w.dataset.start) <= idx && idx < parseInt(w.dataset.end));
-    if (hit) hit.classList.add('hl-word');
-  });
-  utt.addEventListener('end', () => {
-    state.words.forEach(w => w.classList.remove('hl-word'));
-    state.isPlaying = false;
-    el.playBtn.textContent = '▶ 再生';
-    if (state.isRepeating) setTimeout(startSpeech, 600);
-  });
-
-  try {
-    if (speechSynthesis.paused) speechSynthesis.resume();
-    speechSynthesis.speak(utt);
-  } catch(e) {
-    console.warn('[TTS] speak failed:', e);
-    state.isPlaying = false;
-    el.playBtn.textContent = '▶ 再生';
-  }
+  // モノローグ
+  (async () => {
+    const rate  = parseFloat(el.speedSlider.value);
+    const voice = getTTSVoice();
+    setPlayBtnLoading(true);
+    try {
+      const url = await fetchTTS(state.currentText, voice);
+      if (state.dialogueStopped) return;
+      state.isPlaying = true;
+      el.playBtn.disabled = false;
+      el.playBtn.textContent = '⏸ 一時停止';
+      await playAudio(url, rate);
+      if (!state.dialogueStopped) {
+        state.isPlaying = false;
+        el.playBtn.textContent = '▶ 再生';
+        if (state.isRepeating) setTimeout(startSpeech, 600);
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.error('[TTS]', err.message);
+      showToast('音声エラー: ' + err.message, true);
+      state.isPlaying = false;
+      el.playBtn.disabled = false;
+      el.playBtn.textContent = '▶ 再生';
+    }
+  })();
 }
 
 function startDialogueSpeech() {
-  const segs = state.dialogueSegs;
+  const segs  = state.dialogueSegs;
   const rate  = parseFloat(el.speedSlider.value);
-  const voice = getVoice();
+  const voice = getTTSVoice();
 
-  if (state.dialogueFullPlay) {
-    // ── 全体読み上げ: iOS 対応のため同期的にキューイング ──────────
-    const playSegs = segs.filter(s => s.text.trim());
-    if (!playSegs.length) { state.isPlaying = false; el.playBtn.textContent = '▶ 再生'; return; }
-
-    if (speechSynthesis.paused) speechSynthesis.resume();
-
-    playSegs.forEach((seg, qi) => {
-      const origIdx = segs.indexOf(seg);
-      const utt = new SpeechSynthesisUtterance(seg.text);
-      utt.rate = rate; utt.lang = 'en-US';
-      if (voice) utt.voice = voice;
-
-      utt.addEventListener('start', () => {
-        // ライン強調
-        document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
-        const line = document.querySelector(`.dl-line[data-idx="${origIdx}"]`);
-        if (line) line.classList.add('hl-line');
-      });
-      utt.addEventListener('boundary', evt => {
-        if (evt.name !== 'word') return;
-        state.words.forEach(w => w.classList.remove('hl-word'));
-        const absIdx = seg.textOffset + evt.charIndex;
-        const hit = state.words.find(w =>
-          parseInt(w.dataset.start) <= absIdx && absIdx < parseInt(w.dataset.end));
-        if (hit) hit.classList.add('hl-word');
-      });
-      utt.addEventListener('end', () => {
-        document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
-        state.words.forEach(w => w.classList.remove('hl-word'));
-      });
-
-      if (qi === playSegs.length - 1) {
-        utt.addEventListener('end', () => {
-          if (!state.dialogueStopped) {
-            state.isPlaying = false;
-            el.playBtn.textContent = '▶ 再生';
-            if (state.isRepeating) setTimeout(startDialogueSpeech, 800);
-          }
-        });
-      }
-      speechSynthesis.speak(utt);
-    });
-    return;
-  }
-
-  // ── 役割練習: 担当行のみ読み上げ、無音行にポーズ ──────────────
   (async () => {
-    for (let i = 0; i < segs.length; i++) {
-      if (state.dialogueStopped) break;
-      const seg = segs[i];
-      if (!seg.text.trim()) continue;
+    // ── 全セグメントの音声を並列プリフェッチ ──────────────────────
+    setPlayBtnLoading(true);
+    const urls = {};
+    try {
+      await Promise.all(
+        segs.map(async (seg, i) => {
+          if (!seg.text.trim()) return;
+          urls[i] = await fetchTTS(seg.text, voice);
+        })
+      );
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      showToast('音声読み込みエラー: ' + err.message, true);
+      state.isPlaying = false;
+      el.playBtn.disabled = false;
+      el.playBtn.textContent = '▶ 再生';
+      return;
+    }
 
+    if (state.dialogueStopped) return;
+    state.isPlaying = true;
+    el.playBtn.disabled = false;
+    el.playBtn.textContent = '⏸ 一時停止';
+
+    function highlightLine(idx) {
       document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
-      const line = document.querySelector(`.dl-line[data-idx="${i}"]`);
+      const line = document.querySelector(`.dl-line[data-idx="${idx}"]`);
       if (line) line.classList.add('hl-line');
+    }
+    function clearLine() {
+      document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
+    }
 
-      if (seg.role === state.dialogueSilentRole) {
-        // 無音: テキスト長に応じたポーズ
-        const silenceSec = Math.max(1, seg.text.length * 0.06 / rate);
-        await new Promise(r => {
-          const t = setTimeout(r, silenceSec * 1000);
-          state.dialogueTimer = t;
-        });
-      } else {
-        const utt = new SpeechSynthesisUtterance(seg.text);
-        utt.rate = rate; utt.lang = 'en-US';
-        if (voice) utt.voice = voice;
+    // ── 全体読み上げモード ──────────────────────────────────────
+    if (state.dialogueFullPlay) {
+      for (let i = 0; i < segs.length; i++) {
+        if (state.dialogueStopped) break;
+        const seg = segs[i];
+        if (!seg.text.trim() || !urls[i]) continue;
+        highlightLine(i);
+        await playAudio(urls[i], rate).catch(() => {});
+        clearLine();
+      }
+    } else {
+      // ── 役割練習モード ────────────────────────────────────────
+      // 無音パート: 相手セグメントの実際の再生時間分だけ間を空ける
+      for (let i = 0; i < segs.length; i++) {
+        if (state.dialogueStopped) break;
+        const seg = segs[i];
+        if (!seg.text.trim()) continue;
+        highlightLine(i);
 
-        utt.addEventListener('boundary', evt => {
-          if (evt.name !== 'word') return;
-          state.words.forEach(w => w.classList.remove('hl-word'));
-          const absIdx = seg.textOffset + evt.charIndex;
-          const hit = state.words.find(w =>
-            parseInt(w.dataset.start) <= absIdx && absIdx < parseInt(w.dataset.end));
-          if (hit) hit.classList.add('hl-word');
-        });
-
-        await new Promise(resolve => {
-          utt.addEventListener('end', resolve, { once: true });
-          utt.addEventListener('error', resolve, { once: true });
-          speechSynthesis.speak(utt);
-        });
-        state.words.forEach(w => w.classList.remove('hl-word'));
+        if (seg.role === state.dialogueSilentRole) {
+          // 実際の音声長をもとに無音ポーズ
+          const duration = urls[i] ? await getAudioDuration(urls[i]) : 2;
+          await new Promise(r => {
+            const t = setTimeout(r, (duration / rate) * 1000);
+            state.dialogueTimer = t;
+          });
+        } else {
+          await playAudio(urls[i], rate).catch(() => {});
+        }
+        clearLine();
       }
     }
 
-    document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
     if (!state.dialogueStopped) {
       state.isPlaying = false;
       el.playBtn.textContent = '▶ 再生';
@@ -580,27 +592,32 @@ function startDialogueSpeech() {
 }
 
 function pauseSpeech() {
-  speechSynthesis.pause();
-  state.isPlaying = false;
-  state.isPaused  = true;
-  el.playBtn.textContent = '▶ 再生';
+  if (currentAudio && !currentAudio.paused) {
+    currentAudio.pause();
+    state.isPlaying = false;
+    state.isPaused  = true;
+    el.playBtn.textContent = '▶ 再生';
+  }
 }
 
 function resumeSpeech() {
-  speechSynthesis.resume();
-  state.isPlaying = true;
-  state.isPaused  = false;
-  el.playBtn.textContent = '⏸ 一時停止';
+  if (currentAudio && currentAudio.paused) {
+    currentAudio.play().catch(() => {});
+    state.isPlaying = true;
+    state.isPaused  = false;
+    el.playBtn.textContent = '⏸ 一時停止';
+  }
 }
 
 function stopSpeech() {
   state.dialogueStopped = true;
+  if (ttsAbort)          { ttsAbort.abort(); ttsAbort = null; }
   if (state.dialogueTimer) { clearTimeout(state.dialogueTimer); state.dialogueTimer = null; }
-  speechSynthesis.cancel();
+  if (currentAudio)      { currentAudio.pause(); currentAudio.src = ''; currentAudio = null; }
   state.isPlaying = false;
   state.isPaused  = false;
+  el.playBtn.disabled   = false;
   el.playBtn.textContent = '▶ 再生';
-  state.words.forEach(w => { w.classList.remove('hl-word'); w.classList.remove('hl-line'); });
   document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
 }
 
@@ -862,12 +879,23 @@ window.openReview = async function(id) {
       (item.theme ? `　テーマ: ${item.theme}` : '');
     el.reviewText.textContent = item.text;
 
-    el.reviewPlayBtn.onclick = () => {
-      const utt = new SpeechSynthesisUtterance(item.text);
-      utt.rate = parseFloat(el.speedSlider.value); utt.lang = 'en-US';
-      const v = getVoice(); if (v) utt.voice = v;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(utt);
+    el.reviewPlayBtn.onclick = async () => {
+      el.reviewPlayBtn.disabled = true;
+      el.reviewPlayBtn.textContent = '⏳ …';
+      try {
+        const url = await fetchTTS(item.text, getTTSVoice());
+        if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
+        const audio = new Audio(url);
+        audio.playbackRate = parseFloat(el.speedSlider.value);
+        currentAudio = audio;
+        audio.addEventListener('ended', () => { currentAudio = null; });
+        await audio.play();
+      } catch (err) {
+        if (err.name !== 'AbortError') showToast('音声エラー: ' + err.message, true);
+      } finally {
+        el.reviewPlayBtn.disabled = false;
+        el.reviewPlayBtn.textContent = '▶ 読み上げ';
+      }
     };
     el.reviewPractBtn.onclick = () => {
       setCurrentText(item.text);
