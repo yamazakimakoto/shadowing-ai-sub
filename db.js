@@ -2,7 +2,15 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 
-const DB_PATH = process.env.DB_PATH || './shadowing.db';
+// DB_PATH の決定:
+// 1. 環境変数で明示指定されていればそれを使う
+// 2. /data が存在すれば（Render Persistent Disk）そこに保存
+// 3. それ以外（ローカル開発）は ./shadowing.db
+// ★ shadowing-web で発生した教訓: 環境変数未設定だとコンテナの揮発性
+//   ファイルシステムに保存され、デプロイごとに全ユーザーデータが消える
+const DB_PATH = process.env.DB_PATH
+  || (existsSync('/data') ? '/data/shadowing.db' : './shadowing.db');
+console.log(`[init] DB_PATH = ${DB_PATH}`);
 
 // Render.com Persistent Disk のディレクトリを事前作成
 const dir = dirname(DB_PATH);

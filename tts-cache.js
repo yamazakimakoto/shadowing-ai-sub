@@ -7,8 +7,9 @@ import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
+// 優先度: 環境変数 → /data 永続ディスク自動検出 → ローカル開発用
 const CACHE_DIR = process.env.TTS_CACHE_DIR ||
-  (process.env.NODE_ENV === 'production' ? '/data/tts-cache' : './tts-cache-dev');
+  (existsSync('/data') ? '/data/tts-cache' : './tts-cache-dev');
 
 const MAX_CACHE_MB = parseInt(process.env.TTS_CACHE_MAX_MB || '200');  // 200MB 上限
 
