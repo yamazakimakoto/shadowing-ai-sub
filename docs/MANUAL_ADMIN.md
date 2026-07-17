@@ -198,7 +198,7 @@ cat /data/shadowing.db | base64
 | 認証メールが届かない | SMTP設定ミス | Render.com 環境変数で SMTP_* を確認、上記コマンドで手動認証 |
 | ログインできない | password_hash 破損 / verified=0 | DBで状態確認、必要に応じて手動更新 |
 | サブスク反映が遅い | Stripe Webhook 失敗 | Stripe Dashboard → Webhooks → 該当イベントを再送 |
-| 生成回数が0にリセットされない | 月次更新ジョブ未実装 | 手動リセット（上記コマンド）または cron 追加検討 |
+| 生成回数が0にリセットされない | 月次課金Webhook未達（Stripe側の配信失敗）| Stripe Dashboard → Webhook → 該当イベント再送。応急は手動リセット（上記コマンド）|
 
 ---
 
@@ -212,8 +212,20 @@ cat /data/shadowing.db | base64
 
 ---
 
+## 月次サイクルの仕組み
+
+**契約日起点のアニバーサリー方式**（カレンダー月初リセットではない）:
+
+1. 契約日から1ヶ月ごとに Stripe が自動課金（例: 7/17契約 → 8/17課金 → 9/17課金…）
+2. 月次課金成功 → Webhook `invoice.payment_succeeded`（`billing_reason=subscription_cycle`）
+3. `renewSubscription()` が `gen_used = 0` にリセット＋`gen_max` を現行プラン値に同期＋期限延長
+4. 更新通知メールが自動送信される
+
+- 月末日契約（1/31等）は Stripe が自動調整（2月は28日に課金）
+- **決済失敗時**はリセットされず、`customer.subscription.updated`（past_due）で機能停止。Stripe の自動リトライ成功で復活
+- ユーザーごとにサイクルが異なるため「月初に全員リセット」のような cron は不要
+
 ## 既知の制約・今後の拡張余地
 
-- 月次 `gen_used` の自動リセットは未実装。Stripe Webhook の `invoice.paid` で `gen_used = 0` を実行する処理を追加するか、cron で月初に一括リセットする運用にする
 - 採点回数（`score_used` / `score_max`）の上限管理は未実装。コスト爆発リスクがある場合は db.js に追加
 - 複数プラン（無料・スタンダード・プレミアム）対応は未実装。`subscriptions.plan` カラム追加で拡張可能
