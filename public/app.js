@@ -384,12 +384,30 @@ function parseDialogue(text) {
   const lines = text.split('\n');
   let offset = 0;
   const segs = [];
+  // 話者マーカー: 行頭または空白の後の A / B。
+  // AI生成テキストの揺れに耐性を持たせる:
+  //   行頭スペース・**太字**・全角コロン(：)・コロン前後の空白・同一行に複数話者
+  const MARK = /(^|\s)\*{0,2}([AB])\*{0,2}\s*[:：]\*{0,2}\s*/g;
   for (const raw of lines) {
-    const mA = raw.match(/^A:\s*([\s\S]*)/);
-    const mB = raw.match(/^B:\s*([\s\S]*)/);
-    if      (mA) segs.push({ role: 'A', text: mA[1], textOffset: offset + raw.indexOf(mA[1]) });
-    else if (mB) segs.push({ role: 'B', text: mB[1], textOffset: offset + raw.indexOf(mB[1]) });
-    else if (raw.trim()) segs.push({ role: 'N', text: raw, textOffset: offset });
+    MARK.lastIndex = 0;
+    const marks = [];
+    let m;
+    while ((m = MARK.exec(raw)) !== null) {
+      marks.push({ role: m[2], markStart: m.index + m[1].length, textStart: m.index + m[0].length });
+    }
+    if (!marks.length) {
+      if (raw.trim()) segs.push({ role: 'N', text: raw, textOffset: offset });
+    } else {
+      // 最初のマーカーより前にテキストがあればナレーション扱い
+      const head = raw.slice(0, marks[0].markStart);
+      if (head.trim()) segs.push({ role: 'N', text: head, textOffset: offset });
+      for (let i = 0; i < marks.length; i++) {
+        const start = marks[i].textStart;
+        const end   = i + 1 < marks.length ? marks[i + 1].markStart : raw.length;
+        const t     = raw.slice(start, end);
+        if (t.trim()) segs.push({ role: marks[i].role, text: t, textOffset: offset + start });
+      }
+    }
     offset += raw.length + 1;
   }
   return { isDialogue: segs.some(s=>s.role==='A') && segs.some(s=>s.role==='B'), segs };
@@ -411,6 +429,14 @@ el.playModeBtns.forEach(btn => {
     state.dialogueFullPlay = (mode === 'full');
     el.playModeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
     el.roleSelector.classList.toggle('hidden', state.dialogueFullPlay);
+    // 練習モードに入った時、現在の担当ロールボタンをハイライト（未選択に見える問題の防止）
+    if (!state.dialogueFullPlay) {
+      el.roleBtns.forEach(b => {
+        b.classList.remove('active-A', 'active-B');
+        if (b.dataset.role === state.dialogueSilentRole)
+          b.classList.add(`active-${state.dialogueSilentRole}`);
+      });
+    }
     if (state.dialogueMode && state.currentText) {
       stopSpeech();
       el.textDisplay.innerHTML = buildDialogueHTML(
@@ -447,8 +473,9 @@ function updateRoleHint() {
     return;
   }
   el.roleHint.classList.remove('hidden');
-  const opposite = state.dialogueSilentRole === 'A' ? 'B' : 'A';
-  el.roleHint.textContent = `あなたは ${opposite} のパートを練習します（${state.dialogueSilentRole} は無音）`;
+  const mine    = state.dialogueSilentRole;
+  const partner = mine === 'A' ? 'B' : 'A';
+  el.roleHint.textContent = `${mine} があなたのパートです。${mine} は無音になるので声に出して読みましょう（${partner} は再生されます）`;
 }
 
 // =====================================================================
