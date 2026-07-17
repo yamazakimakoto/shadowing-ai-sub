@@ -20,6 +20,12 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// ── プラン設定 ────────────────────────────────────────────────────────
+// 月間生成上限。変更時はここ（または環境変数 GEN_MAX_PER_MONTH）を更新し、
+// Stripe 側の Price と index.html / email.js の表示も合わせること。
+// 2026-07-17: 30件/¥700 → 45件/¥980 に改定
+export const GEN_MAX = parseInt(process.env.GEN_MAX_PER_MONTH || '45');
+
 // ── テーブル作成 ──────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -41,7 +47,7 @@ db.exec(`
     start_date             DATETIME,
     end_date               DATETIME,
     gen_used               INTEGER NOT NULL DEFAULT 0,
-    gen_max                INTEGER NOT NULL DEFAULT 30,
+    gen_max                INTEGER NOT NULL DEFAULT 45,
     created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -59,6 +65,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sub_user ON subscriptions(user_id);
   CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_texts(user_id);
 `);
+
+// ── 既存行のプラン移行 ────────────────────────────────────────────────
+// CREATE TABLE IF NOT EXISTS は既存テーブルの DEFAULT を変えないため、
+// 旧プラン値(30)のままの行を現行の GEN_MAX へ引き上げる（個別調整済みの
+// 行には触れない）。起動時に毎回実行しても冪等。
+try {
+  const migrated = db.prepare(
+    'UPDATE subscriptions SET gen_max = ? WHERE gen_max = 30 AND ? > 30'
+  ).run(GEN_MAX, GEN_MAX);
+  if (migrated.changes > 0) console.log(`[migrate] gen_max 30 → ${GEN_MAX}: ${migrated.changes}件`);
+} catch (e) {
+  console.warn('[migrate] gen_max 移行スキップ:', e.message);
+}
 
 // ── ヘルパー関数 ──────────────────────────────────────────────────────
 
@@ -132,19 +151,19 @@ export function upsertStripeSubscription({
   } else {
     db.prepare(`
       INSERT INTO subscriptions
-        (user_id, stripe_customer_id, stripe_subscription_id, status, start_date, end_date)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(userId, stripeCustomerId, stripeSubscriptionId, status, startDate, endDate);
+        (user_id, stripe_customer_id, stripe_subscription_id, status, start_date, end_date, gen_max)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, stripeCustomerId, stripeSubscriptionId, status, startDate, endDate, GEN_MAX);
   }
 }
 
-/** 月次更新: gen_used リセット＋期限延長 */
+/** 月次更新: gen_used リセット＋期限延長（gen_max も現行プラン値に同期） */
 export function renewSubscription(stripeSubscriptionId, newEndDate) {
   db.prepare(`
     UPDATE subscriptions
-    SET gen_used = 0, end_date = ?, status = 'active', updated_at = datetime('now')
+    SET gen_used = 0, gen_max = ?, end_date = ?, status = 'active', updated_at = datetime('now')
     WHERE stripe_subscription_id = ?
-  `).run(newEndDate, stripeSubscriptionId);
+  `).run(GEN_MAX, newEndDate, stripeSubscriptionId);
 }
 
 /** 生成件数を1増やす（排他的に） */

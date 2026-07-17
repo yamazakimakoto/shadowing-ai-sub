@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { GEN_MAX } from './db.js';
 
 const APP_URL  = process.env.APP_URL  || 'http://localhost:3002';
 const APP_NAME = 'English Shadowing AI';
@@ -53,7 +54,7 @@ export async function sendSubscriptionStartEmail(to, name, endDate) {
       <p>${name} さん、ご契約ありがとうございます！</p>
       <div style="background:#f0f9ff;border-radius:12px;padding:16px;margin:16px 0">
         <p style="margin:4px 0">📅 <strong>有効期限：</strong>${d}</p>
-        <p style="margin:4px 0">📊 <strong>生成可能件数：</strong>30件/月</p>
+        <p style="margin:4px 0">📊 <strong>生成可能件数：</strong>${GEN_MAX}件/月</p>
       </div>
       <p>
         <a href="${APP_URL}" style="background:#0ea5e9;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">
@@ -74,7 +75,7 @@ export async function sendSubscriptionRenewEmail(to, name, endDate) {
       <p>${name} さん、今月も更新されました！</p>
       <div style="background:#f0f9ff;border-radius:12px;padding:16px;margin:16px 0">
         <p style="margin:4px 0">📅 <strong>次回期限：</strong>${d}</p>
-        <p style="margin:4px 0">📊 <strong>生成件数：</strong>0/30 件にリセットされました</p>
+        <p style="margin:4px 0">📊 <strong>生成件数：</strong>0/${GEN_MAX} 件にリセットされました</p>
       </div>
     </div>`;
 
