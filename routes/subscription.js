@@ -14,6 +14,7 @@ import {
   sendSubscriptionRenewEmail,
 } from '../email.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isOwner, ownerSubscription } from '../middleware/subscription.js';
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
@@ -23,6 +24,10 @@ const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
 // ── サブスク状態取得 ────────────────────────────────────────────────
 router.get('/status', requireAuth, (req, res) => {
+  // オーナー（OWNER_EMAILS）は常にアクティブ扱い（課金不要・無制限）
+  if (isOwner(req.user)) {
+    return res.json({ active: true, sub: ownerSubscription() });
+  }
   const active = getActiveSubscription(req.user.id);
   const latest = getLatestSubscription(req.user.id);
   res.json({

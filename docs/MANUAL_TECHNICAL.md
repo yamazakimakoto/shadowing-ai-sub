@@ -87,6 +87,8 @@ shadowing-ai-sub/
 | `STRIPE_PRICE_ID` | ✅ | サブスクの Stripe Price ID |
 | `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` | ✅ | nodemailer SMTP 設定 |
 | `APP_URL` | ✅ | アプリの公開URL（メール内リンク用）|
+| `OWNER_EMAILS` | 任意 | オーナー特権メール（カンマ区切り）。登録ユーザーは課金なし・無制限で全機能利用可 |
+| `GEN_MAX_PER_MONTH` | 任意 | 月間生成上限の上書き（デフォルト 45）|
 | `NODE_ENV` | 任意 | `production` で TTS キャッシュを `/data/tts-cache` に保存 |
 | `DATA_DIR` | 任意 | データディレクトリパス（デフォルト `./data`）|
 | `PORT` | 任意 | リッスンポート（デフォルト 3002）|

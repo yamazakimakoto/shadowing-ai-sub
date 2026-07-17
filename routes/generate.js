@@ -45,8 +45,8 @@ Output ONLY the English text. No title, no label, no explanation.`,
       }
     }
 
-    // 生成成功後にカウントを増やす
-    incrementGenUsed(subId);
+    // 生成成功後にカウントを増やす（オーナーはカウント対象外）
+    if (!req.subscription.owner) incrementGenUsed(subId);
     const updated = req.subscription;
     res.write(`data: ${JSON.stringify({ done: true, gen_used: updated.gen_used + 1, gen_max: updated.gen_max })}\n\n`);
     res.write('data: [DONE]\n\n');
