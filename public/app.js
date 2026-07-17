@@ -137,25 +137,49 @@ async function fetchTTS(text, voice) {
   return url;
 }
 
+// ★ 単一の共有Audioインスタンス
+//   iOS Safari は新規 Audio 生成のたびに user gesture 権限が失われるため、
+//   ダイアログ連続再生で2文目以降が play() 拒否される。
+//   同一インスタンスの src を入れ替えれば権限が継続する（shadowing-webで実証済み）。
+let _sharedAudio = null;
+function _getSharedAudio() {
+  if (!_sharedAudio) {
+    _sharedAudio = new Audio();
+    _sharedAudio.preload = 'auto';
+  }
+  return _sharedAudio;
+}
+
 /** Audio を再生して終わるまで待つ Promise */
 function playAudio(url, rate) {
   return new Promise((resolve, reject) => {
-    const audio = new Audio(url);
+    const audio = _getSharedAudio();
+    audio.src = url;
     audio.playbackRate = Math.max(0.5, Math.min(2.0, rate));
     currentAudio = audio;
-    audio.addEventListener('ended',  () => { currentAudio = null; resolve(); });
-    audio.addEventListener('error',  () => { currentAudio = null; reject(new Error('audio error')); });
-    audio.play().catch(reject);
+
+    const cleanup = () => {
+      audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
+    };
+    const onEnded = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error('audio error')); };
+    audio.addEventListener('ended', onEnded, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+
+    const p = audio.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(err => { cleanup(); reject(err); });
+    }
   });
 }
 
-/** Audio の再生時間を取得 */
-function getAudioDuration(url) {
-  return new Promise(resolve => {
-    const audio = new Audio(url);
-    audio.addEventListener('loadedmetadata', () => resolve(audio.duration), { once: true });
-    audio.addEventListener('error', () => resolve(3), { once: true });
-  });
+/** 単語数ベースの再生時間概算（無音待機用）
+ *  metadata ロード用に別 Audio を作ると iOS で保留される事例があるため、
+ *  実測ではなく概算を使う（平均英語音声 ~150wpm 基準 + バッファ700ms） */
+function estimateDurationMs(text, rate) {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean).length || 1;
+  return Math.max(1200, (words / (150 * rate)) * 60_000 + 700);
 }
 
 /** ボイスセレクトの値 */
@@ -388,6 +412,9 @@ function parseDialogue(text) {
   // AI生成テキストの揺れに耐性を持たせる:
   //   行頭スペース・**太字**・全角コロン(：)・コロン前後の空白・同一行に複数話者
   const MARK = /(^|\s)\*{0,2}([AB])\*{0,2}\s*[:：]\*{0,2}\s*/g;
+  // 「A:」だけの行の後に本文が続く形式に対応するため、直近の話者を保持する。
+  // マーカー出現前の行はナレーション(N)扱い。
+  let currentRole = 'N';
   for (const raw of lines) {
     MARK.lastIndex = 0;
     const marks = [];
@@ -396,16 +423,18 @@ function parseDialogue(text) {
       marks.push({ role: m[2], markStart: m.index + m[1].length, textStart: m.index + m[0].length });
     }
     if (!marks.length) {
-      if (raw.trim()) segs.push({ role: 'N', text: raw, textOffset: offset });
+      // マーカー無し行: 直近の話者に帰属（マーカー単独行の続きの本文）
+      if (raw.trim()) segs.push({ role: currentRole, text: raw, textOffset: offset });
     } else {
-      // 最初のマーカーより前にテキストがあればナレーション扱い
+      // 最初のマーカーより前のテキストは直前の話者に帰属
       const head = raw.slice(0, marks[0].markStart);
-      if (head.trim()) segs.push({ role: 'N', text: head, textOffset: offset });
+      if (head.trim()) segs.push({ role: currentRole, text: head, textOffset: offset });
       for (let i = 0; i < marks.length; i++) {
         const start = marks[i].textStart;
         const end   = i + 1 < marks.length ? marks[i + 1].markStart : raw.length;
         const t     = raw.slice(start, end);
-        if (t.trim()) segs.push({ role: marks[i].role, text: t, textOffset: offset + start });
+        currentRole = marks[i].role;  // 本文が次行の場合はここで話者だけ切り替わる
+        if (t.trim()) segs.push({ role: currentRole, text: t, textOffset: offset + start });
       }
     }
     offset += raw.length + 1;
@@ -585,7 +614,15 @@ function startDialogueSpeech() {
         const seg = segs[i];
         if (!seg.text.trim() || !urls[i]) continue;
         highlightLine(i);
-        await playAudio(urls[i], rate).catch(() => {});
+        try {
+          await playAudio(urls[i], rate);
+        } catch (err) {
+          console.warn('[dialogue] play failed at line', i, err.message);
+          await new Promise(r => {
+            const t = setTimeout(r, estimateDurationMs(seg.text, rate));
+            state.dialogueTimer = t;
+          });
+        }
         clearLine();
       }
     } else {
@@ -598,14 +635,22 @@ function startDialogueSpeech() {
         highlightLine(i);
 
         if (seg.role === state.dialogueSilentRole) {
-          // 実際の音声長をもとに無音ポーズ
-          const duration = urls[i] ? await getAudioDuration(urls[i]) : 2;
+          // 自分のパート: 単語数ベースで無音待機
           await new Promise(r => {
-            const t = setTimeout(r, (duration / rate) * 1000);
+            const t = setTimeout(r, estimateDurationMs(seg.text, rate));
             state.dialogueTimer = t;
           });
         } else {
-          await playAudio(urls[i], rate).catch(() => {});
+          try {
+            await playAudio(urls[i], rate);
+          } catch (err) {
+            console.warn('[dialogue] play failed at line', i, err.message);
+            // 再生失敗時も推定時間ぶん待つ（瞬間スキップ防止）
+            await new Promise(r => {
+              const t = setTimeout(r, estimateDurationMs(seg.text, rate));
+              state.dialogueTimer = t;
+            });
+          }
         }
         clearLine();
       }
