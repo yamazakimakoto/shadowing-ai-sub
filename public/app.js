@@ -18,6 +18,7 @@ const state = {
   lastTranscript:     '',
   lastScore:          null,
   explainCache:       null,   // { text, translation, items }
+  currentSavedId:     null,   // 履歴から読み込んだ保存テキストのID（解説の永続化先）
   // Dialogue
   dialogueMode:       false,
   dialogueSilentRole: 'B',
@@ -332,6 +333,7 @@ el.saveManualBtn.addEventListener('click', () => {
 function setCurrentText(text) {
   state.currentText = text;
   state.explainCache = null;
+  state.currentSavedId = null; // 履歴から読み込む場合は呼出側が直後に再セットする
   if (!text) {
     el.textDisplay.innerHTML = '<p class="placeholder-text">上でテキストを生成または入力してください</p>';
     setControlsEnabled(false);
@@ -606,7 +608,10 @@ function startDialogueSpeech() {
     function highlightLine(idx) {
       document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
       const line = document.querySelector(`.dl-line[data-idx="${idx}"]`);
-      if (line) line.classList.add('hl-line');
+      if (line) {
+        line.classList.add('hl-line');
+        line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     }
     function clearLine() {
       document.querySelectorAll('.dl-line').forEach(l => l.classList.remove('hl-line'));
@@ -946,6 +951,13 @@ async function openExplain() {
     state.explainCache = { text: state.currentText, translation, items };
     renderExplainContent(translation, items);
     if (el.regenExplain) el.regenExplain.classList.remove('hidden');
+    // 保存済みテキストなら解説をDBにも永続化（次回はAPI呼出なしで即表示）
+    if (state.currentSavedId) {
+      fetch(`/api/saved/${state.currentSavedId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ translation, items }),
+      }).catch(() => {}); // 失敗してもセッションキャッシュは有効なので握りつぶす
+    }
   } catch (err) {
     el.explainLoading.classList.add('hidden');
     el.explainList.innerHTML = `<p style="color:#ef4444">エラー: ${escHtml(err.message)}</p>`;
@@ -989,6 +1001,8 @@ async function saveText() {
       body: JSON.stringify(body),
     });
     if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+    const data = await res.json();
+    if (data.id) state.currentSavedId = data.id; // 以後の解説（再）生成をこの保存行に永続化
     el.saveTextBtn.textContent = '✅ 保存済み';
     el.saveTextBtn.disabled = true;
     showToast('✅ テキストを保存しました');
@@ -1088,6 +1102,15 @@ window.openReview = async function(id) {
     };
     el.reviewPractBtn.onclick = () => {
       setCurrentText(item.text);
+      // 保存済み解説をキャッシュに復元（解説ボタンでAPIを呼ばず即表示・再生成は可能）
+      state.currentSavedId = item.id;
+      if (item.translation || (item.items && item.items.length)) {
+        state.explainCache = {
+          text: item.text,
+          translation: item.translation || '',
+          items: item.items || [],
+        };
+      }
       el.reviewModal.classList.add('hidden');
       switchTab('practice');
     };

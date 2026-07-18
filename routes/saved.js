@@ -4,6 +4,7 @@ import { requireSubscription } from '../middleware/subscription.js';
 import {
   getSavedTexts, getSavedTextById,
   insertSavedText, deleteSavedText, countSavedTexts,
+  updateSavedTextExplanation,
 } from '../db.js';
 
 const router = Router();
@@ -50,6 +51,19 @@ router.post('/', requireAuth, requireSubscription, (req, res) => {
     items_json: items ? JSON.stringify(items) : null,
   });
   res.json({ ok: true, id });
+});
+
+// ── 解説の更新（生成/再生成後の永続化） ────────────────────────────
+router.patch('/:id', requireAuth, requireSubscription, (req, res) => {
+  const { translation, items } = req.body;
+  const result = updateSavedTextExplanation(
+    parseInt(req.params.id),
+    req.user.id,
+    translation || null,
+    items ? JSON.stringify(items) : null
+  );
+  if (result.changes === 0) return res.status(404).json({ error: '見つかりません' });
+  res.json({ ok: true });
 });
 
 // ── 削除 ──────────────────────────────────────────────────────────

@@ -217,6 +217,14 @@ export function deleteSavedText(id, userId) {
   ).run(id, userId);
 }
 
+/** 保存テキストの解説（訳＋フレーズ）を更新 — 解説の生成/再生成後の永続化用 */
+export function updateSavedTextExplanation(id, userId, translation, items_json) {
+  return db.prepare(`
+    UPDATE saved_texts SET translation = ?, items_json = ?
+    WHERE id = ? AND user_id = ?
+  `).run(translation || null, items_json || null, id, userId);
+}
+
 export function countSavedTexts(userId) {
   return db.prepare('SELECT COUNT(*) as cnt FROM saved_texts WHERE user_id = ?').get(userId).cnt;
 }

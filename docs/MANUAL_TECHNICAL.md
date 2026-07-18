@@ -118,7 +118,7 @@ shadowing-ai-sub/
 | POST | `/api/explain` | Claude APIで日本語訳・フレーズ解説 |
 | POST | `/api/tts` | OpenAI TTS（mp3返却・ディスクキャッシュ付き）|
 | POST | `/api/score` | OpenAI Whisperで採点 |
-| GET/POST/DELETE | `/api/saved` | 保存テキスト管理 |
+| GET/POST/PATCH/DELETE | `/api/saved` | 保存テキスト管理（PATCHは解説の永続化用） |
 
 ---
 

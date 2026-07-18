@@ -195,8 +195,9 @@ textarea { resize: vertical; min-height: 90px; }
 .word.hl-word { background: #fef9c3; }
 .word.hl-line { background: #e0f2fe; }
 
-.dl-line { padding: 3px 0; transition: background .1s; border-radius: 6px; }
-.dl-line.hl-line { background: #e0f2fe; }
+.dl-line { padding: 4px 8px; transition: background .2s, opacity .2s; border-radius: 6px; margin-bottom: 2px; }
+/* 読み上げ中の行: モデル版と同じ黄色ハイライト＋枠線（無音行の減光も上書き） */
+.dl-line.hl-line { background: #fffbeb !important; outline: 2px solid #fbbf24; opacity: 1 !important; }
 .dl-silent { opacity: .3; }
 
 .role-tag {
