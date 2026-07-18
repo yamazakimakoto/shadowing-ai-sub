@@ -163,7 +163,12 @@ function playAudio(url, rate) {
       audio.removeEventListener('error', onError);
     };
     const onEnded = () => { cleanup(); resolve(); };
-    const onError = () => { cleanup(); reject(new Error('audio error')); };
+    const onError = () => {
+      cleanup();
+      // 停止操作（stopSpeech が src='' にする）で発火する error は正常系として扱う
+      if (state.dialogueStopped) { resolve(); return; }
+      reject(new Error('audio error'));
+    };
     audio.addEventListener('ended', onEnded, { once: true });
     audio.addEventListener('error', onError, { once: true });
 
@@ -558,7 +563,7 @@ function startSpeech() {
         if (state.isRepeating) setTimeout(startSpeech, 600);
       }
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError' || state.dialogueStopped) return; // 停止操作は正常系
       console.error('[TTS]', err.message);
       showToast('音声エラー: ' + err.message, true);
       state.isPlaying = false;
@@ -1068,7 +1073,7 @@ window.openReview = async function(id) {
       el.reviewPlayBtn.textContent = '⏳ …';
       try {
         const url = await fetchTTS(item.text, getTTSVoice());
-        if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; }
+        stopSpeech(); // 進行中の再生を正常停止（保留中のplayAudio Promiseも静かに解決させる）
         const audio = new Audio(url);
         audio.playbackRate = parseFloat(el.speedSlider.value);
         currentAudio = audio;
