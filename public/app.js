@@ -255,7 +255,11 @@ async function generateText() {
     const resp = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ theme, style: el.styleSelect?.value || 'dialogue' }),
+      body: JSON.stringify({
+        theme,
+        style: el.styleSelect?.value || 'dialogue',
+        level: document.getElementById('level-select')?.value || 'intermediate',
+      }),
     });
 
     if (!resp.ok) {
