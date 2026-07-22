@@ -4,7 +4,7 @@ import { requireSubscription } from '../middleware/subscription.js';
 import {
   getSavedTexts, getSavedTextById,
   insertSavedText, deleteSavedText, countSavedTexts,
-  updateSavedTextExplanation,
+  updateSavedTextExplanation, updateSavedTextChecks, reorderSavedTexts,
 } from '../db.js';
 
 const router = Router();
@@ -13,11 +13,12 @@ const MAX_SAVED = 200;
 // ── 保存テキスト一覧 ───────────────────────────────────────────────
 router.get('/', requireAuth, requireSubscription, (req, res) => {
   const rows = getSavedTexts(req.user.id);
-  // items_json を parse してから返す
+  // items_json を parse し、チェック3つを checks 配列として返す
   const list = rows.map(r => ({
     ...r,
     items: r.items_json ? JSON.parse(r.items_json) : null,
     items_json: undefined,
+    checks: [!!r.check1, !!r.check2, !!r.check3],
   }));
   res.json(list);
 });
@@ -30,12 +31,13 @@ router.get('/:id', requireAuth, requireSubscription, (req, res) => {
     ...row,
     items: row.items_json ? JSON.parse(row.items_json) : null,
     items_json: undefined,
+    checks: [!!row.check1, !!row.check2, !!row.check3],
   });
 });
 
 // ── 保存 ──────────────────────────────────────────────────────────
 router.post('/', requireAuth, requireSubscription, (req, res) => {
-  const { theme = '', text, translation, items } = req.body;
+  const { theme = '', text, translation, items, checks } = req.body;
   if (!text) return res.status(400).json({ error: 'テキストが必要です' });
 
   const cnt = countSavedTexts(req.user.id);
@@ -49,20 +51,42 @@ router.post('/', requireAuth, requireSubscription, (req, res) => {
     text,
     translation: translation || null,
     items_json: items ? JSON.stringify(items) : null,
+    checks,
   });
   res.json({ ok: true, id });
 });
 
-// ── 解説の更新（生成/再生成後の永続化） ────────────────────────────
+// ── 部分更新（解説の永続化 / 進捗チェック） ─────────────────────────
 router.patch('/:id', requireAuth, requireSubscription, (req, res) => {
-  const { translation, items } = req.body;
-  const result = updateSavedTextExplanation(
-    parseInt(req.params.id),
-    req.user.id,
-    translation || null,
-    items ? JSON.stringify(items) : null
-  );
-  if (result.changes === 0) return res.status(404).json({ error: '見つかりません' });
+  const id = parseInt(req.params.id);
+  const { translation, items, checks } = req.body;
+
+  let changes = 0;
+  // 解説の更新（translation か items が指定された時のみ）
+  if (translation !== undefined || items !== undefined) {
+    const r = updateSavedTextExplanation(
+      id, req.user.id,
+      translation || null,
+      items ? JSON.stringify(items) : null
+    );
+    changes += r.changes;
+  }
+  // 進捗チェックの更新（checks が指定された時のみ）
+  if (Array.isArray(checks) && checks.length === 3) {
+    const r = updateSavedTextChecks(id, req.user.id, checks);
+    changes += r.changes;
+  }
+  if (changes === 0) return res.status(404).json({ error: '更新対象がありません' });
+  res.json({ ok: true });
+});
+
+// ── 手動並べ替え ───────────────────────────────────────────────────
+router.post('/reorder', requireAuth, requireSubscription, (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || !ids.length || !ids.every(n => Number.isInteger(n))) {
+    return res.status(400).json({ error: 'ids（数値配列）が必要です' });
+  }
+  reorderSavedTexts(req.user.id, ids);
   res.json({ ok: true });
 });
 

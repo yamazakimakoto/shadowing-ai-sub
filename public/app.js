@@ -19,6 +19,8 @@ const state = {
   lastScore:          null,
   explainCache:       null,   // { text, translation, items }
   currentSavedId:     null,   // 履歴から読み込んだ保存テキストのID（解説の永続化先）
+  currentChecks:      [false, false, false], // 学習進捗チェック（文書の属性）
+  savedListCache:     [],     // 保存一覧の並べ替え用キャッシュ
   // Dialogue
   dialogueMode:       false,
   dialogueSilentRole: 'B',
@@ -55,6 +57,7 @@ const el = {
   textDisplay:    $('text-display'),
   explainBtn:     $('explain-btn'),
   saveTextBtn:    $('save-text-btn'),
+  checkBoxes:     [$('check-1'), $('check-2'), $('check-3')],
   // Dialogue
   dialogueCtrl:   $('dialogue-controls'),
   roleBtns:       document.querySelectorAll('.role-btn'),
@@ -334,6 +337,8 @@ function setCurrentText(text) {
   state.currentText = text;
   state.explainCache = null;
   state.currentSavedId = null; // 履歴から読み込む場合は呼出側が直後に再セットする
+  state.currentChecks = [false, false, false];
+  syncCheckUI();
   if (!text) {
     el.textDisplay.innerHTML = '<p class="placeholder-text">上でテキストを生成または入力してください</p>';
     setControlsEnabled(false);
@@ -984,6 +989,27 @@ function renderExplainContent(translation, items) {
 }
 
 // =====================================================================
+//  学習進捗チェック（文書の属性・保存文書はサーバーに永続化）
+// =====================================================================
+function syncCheckUI() {
+  el.checkBoxes.forEach((cb, i) => { if (cb) cb.checked = !!state.currentChecks[i]; });
+}
+
+el.checkBoxes.forEach((cb, i) => {
+  if (!cb) return;
+  cb.addEventListener('change', () => {
+    state.currentChecks[i] = cb.checked;
+    // 保存済み文書ならサーバーへ即時反映
+    if (state.currentSavedId) {
+      fetch(`/api/saved/${state.currentSavedId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checks: state.currentChecks }),
+      }).catch(() => {});
+    }
+  });
+});
+
+// =====================================================================
 //  保存テキスト（サーバー側）
 // =====================================================================
 el.saveTextBtn.addEventListener('click', saveText);
@@ -992,6 +1018,7 @@ async function saveText() {
   if (!state.currentText) return;
   try {
     const body = { text: state.currentText, theme: el.themeInput?.value?.trim() || '' };
+    body.checks = state.currentChecks; // 進捗チェックも属性として保存
     if (state.explainCache && state.explainCache.text === state.currentText) {
       body.translation = state.explainCache.translation;
       body.items = state.explainCache.items;
@@ -1024,21 +1051,84 @@ async function renderSaved() {
       el.savedList.innerHTML = '<p class="empty-msg">保存済みのテキストはありません</p>';
       return;
     }
-    el.savedList.innerHTML = list.map(item => {
-      const date = new Date(item.created_at).toLocaleDateString('ja-JP');
-      return `
-        <div class="saved-item" data-id="${item.id}">
-          <div class="saved-item-main" onclick="openReview(${item.id})">
-            ${item.theme ? `<div class="saved-item-theme">${escHtml(item.theme)}</div>` : ''}
-            <div class="saved-item-text">${escHtml(item.text.slice(0, 60))}…</div>
-            <div class="saved-item-meta">${date}</div>
-          </div>
-          <button class="btn-del" onclick="deleteSavedItem(${item.id}, event)">🗑</button>
-        </div>`;
-    }).join('');
+    state.savedListCache = list; // 並べ替え用に保持
+    renderSavedFromCache();
   } catch {
     el.savedList.innerHTML = '<p class="empty-msg">読み込みに失敗しました</p>';
   }
+}
+
+// ── 一覧から進捗チェックを直接トグル ──────────────────────────────────
+window.toggleSavedCheck = async function(id, checkIdx, evt) {
+  evt.stopPropagation();
+  const item = state.savedListCache.find(s => s.id === id);
+  if (!item) return;
+  const checks = (Array.isArray(item.checks) ? item.checks : [false, false, false]).slice();
+  checks[checkIdx] = !checks[checkIdx];
+  item.checks = checks;
+  // 楽観的にUI更新
+  evt.target.classList.toggle('checked', checks[checkIdx]);
+  // 練習中の文書と同じなら練習画面のチェックも同期
+  if (state.currentSavedId === id) { state.currentChecks = checks.map(Boolean); syncCheckUI(); }
+  try {
+    await fetch(`/api/saved/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checks }),
+    });
+  } catch {
+    showToast('チェックの保存に失敗しました', true);
+  }
+};
+
+// ── 並べ替え（▲▼で1つ移動 → 全体順序をサーバーへ） ────────────────────
+window.moveSavedItem = async function(id, dir, evt) {
+  evt.stopPropagation();
+  const list = state.savedListCache;
+  const idx = list.findIndex(s => s.id === id);
+  const to  = idx + dir;
+  if (idx < 0 || to < 0 || to >= list.length) return;
+  [list[idx], list[to]] = [list[to], list[idx]];
+  // 楽観的に再描画してからサーバーへ順序を送信
+  const ids = list.map(s => s.id);
+  renderSavedFromCache();
+  try {
+    await fetch('/api/saved/reorder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+  } catch {
+    showToast('並び順の保存に失敗しました', true);
+    renderSaved(); // サーバー状態で復元
+  }
+};
+
+// キャッシュから再描画（fetchなし・並べ替え直後用）
+function renderSavedFromCache() {
+  const list = state.savedListCache;
+  if (!list.length) return;
+  el.savedList.innerHTML = list.map((item, idx) => {
+    const date = new Date(item.created_at).toLocaleDateString('ja-JP');
+    const checks = Array.isArray(item.checks) ? item.checks : [false, false, false];
+    const checksHtml = checks.map((c, ci) => `
+      <button class="list-check${c ? ' checked' : ''}" title="進捗チェック${ci + 1}"
+        onclick="toggleSavedCheck(${item.id}, ${ci}, event)">${ci + 1}</button>`).join('');
+    return `
+      <div class="saved-item" data-id="${item.id}">
+        <div class="saved-order-btns">
+          <button class="btn-order" ${idx === 0 ? 'disabled' : ''} onclick="moveSavedItem(${item.id}, -1, event)" title="上へ">▲</button>
+          <button class="btn-order" ${idx === list.length - 1 ? 'disabled' : ''} onclick="moveSavedItem(${item.id}, 1, event)" title="下へ">▼</button>
+        </div>
+        <div class="saved-item-main" onclick="openReview(${item.id})">
+          ${item.theme ? `<div class="saved-item-theme">${escHtml(item.theme)}</div>` : ''}
+          <div class="saved-item-text">${escHtml(item.text.slice(0, 60))}…</div>
+          <div class="saved-item-meta">${date}</div>
+        </div>
+        <div class="saved-item-side">
+          <div class="list-checks">${checksHtml}</div>
+          <button class="btn-del" onclick="deleteSavedItem(${item.id}, event)">🗑</button>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 window.deleteSavedItem = async function(id, evt) {
@@ -1111,6 +1201,9 @@ window.openReview = async function(id) {
           items: item.items || [],
         };
       }
+      // 進捗チェックを復元
+      state.currentChecks = Array.isArray(item.checks) ? item.checks.map(Boolean) : [false, false, false];
+      syncCheckUI();
       el.reviewModal.classList.add('hidden');
       switchTab('practice');
     };

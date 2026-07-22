@@ -275,6 +275,28 @@ textarea { resize: vertical; min-height: 90px; }
 }
 .saved-item:hover { border-color: var(--sky); }
 .saved-item-main { flex: 1; min-width: 0; }
+
+/* ── 学習進捗チェック（保存ボタン横） ─────────────────────────────── */
+.progress-checks { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: var(--sky-ll, #f0f9ff); border-radius: 10px; }
+.progress-label { font-size: .78rem; color: var(--text2, #64748b); }
+.check-item { display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+  font-size: .82rem; color: var(--text2, #64748b); user-select: none; }
+.check-item input { width: 16px; height: 16px; accent-color: #0ea5e9; cursor: pointer; }
+
+/* ── 保存一覧: チェック表示・並べ替え ─────────────────────────────── */
+.saved-item-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.list-checks { display: flex; gap: 4px; }
+.list-check { width: 24px; height: 24px; border-radius: 6px; border: 1.5px solid #cbd5e1;
+  background: #fff; color: #94a3b8; font-size: .72rem; font-weight: 700; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0; }
+.list-check.checked { background: #0ea5e9; border-color: #0ea5e9; color: #fff; }
+.saved-order-btns { display: flex; flex-direction: column; gap: 2px; }
+.btn-order { width: 26px; height: 22px; border-radius: 6px; border: 1px solid #e2e8f0;
+  background: #fff; color: #64748b; font-size: .6rem; cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center; }
+.btn-order:hover:not(:disabled) { background: #f1f5f9; }
+.btn-order:disabled { opacity: .25; cursor: default; }
 .saved-item-theme { font-size: .78rem; color: var(--sky); font-weight: 600; margin-bottom: 2px; }
 .saved-item-text { font-size: .88rem; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .saved-item-meta { font-size: .75rem; color: var(--gray-l); margin-top: 3px; }

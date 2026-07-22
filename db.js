@@ -66,6 +66,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_texts(user_id);
 `);
 
+// ── saved_texts のカラム追加マイグレーション（冪等） ────────────────────
+// 学習進捗チェック3つ + 手動並べ替え順。既存DBに ALTER TABLE で追加する。
+{
+  const cols = db.prepare('PRAGMA table_info(saved_texts)').all().map(c => c.name);
+  const addCol = (name, ddl) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE saved_texts ADD COLUMN ${ddl}`);
+      console.log(`[migrate] saved_texts.${name} を追加`);
+    }
+  };
+  addCol('check1', 'check1 INTEGER NOT NULL DEFAULT 0');
+  addCol('check2', 'check2 INTEGER NOT NULL DEFAULT 0');
+  addCol('check3', 'check3 INTEGER NOT NULL DEFAULT 0');
+  addCol('sort_order', 'sort_order INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('sort_order')) {
+    // 初期順序: 既存の表示順（作成日時の新しい順）を維持
+    db.exec(`
+      UPDATE saved_texts SET sort_order = (
+        SELECT COUNT(*) FROM saved_texts s2
+        WHERE s2.user_id = saved_texts.user_id
+          AND (s2.created_at > saved_texts.created_at
+               OR (s2.created_at = saved_texts.created_at AND s2.id > saved_texts.id))
+      )
+    `);
+  }
+}
+
 // ── 既存行のプラン移行 ────────────────────────────────────────────────
 // CREATE TABLE IF NOT EXISTS は既存テーブルの DEFAULT を変えないため、
 // 旧プラン値(30)のままの行を現行の GEN_MAX へ引き上げる（個別調整済みの
@@ -193,7 +220,7 @@ export function getSubByCustomerId(customerId) {
 
 export function getSavedTexts(userId) {
   return db.prepare(
-    'SELECT * FROM saved_texts WHERE user_id = ? ORDER BY created_at DESC'
+    'SELECT * FROM saved_texts WHERE user_id = ? ORDER BY sort_order ASC, id DESC'
   ).all(userId);
 }
 
@@ -203,13 +230,35 @@ export function getSavedTextById(id, userId) {
   ).get(id, userId);
 }
 
-export function insertSavedText({ userId, theme, text, translation, items_json }) {
+export function insertSavedText({ userId, theme, text, translation, items_json, checks }) {
+  // 新規保存は一覧の先頭に置く（既存の最小 sort_order より小さい値を振る）
+  const min = db.prepare(
+    'SELECT COALESCE(MIN(sort_order), 1) AS m FROM saved_texts WHERE user_id = ?'
+  ).get(userId).m;
+  const [c1, c2, c3] = Array.isArray(checks) ? checks.map(v => (v ? 1 : 0)) : [0, 0, 0];
   const res = db.prepare(`
-    INSERT INTO saved_texts (user_id, theme, text, translation, items_json)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(userId, theme, text, translation || null, items_json || null);
+    INSERT INTO saved_texts (user_id, theme, text, translation, items_json, check1, check2, check3, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(userId, theme, text, translation || null, items_json || null, c1, c2, c3, min - 1);
   return res.lastInsertRowid;
 }
+
+/** 学習進捗チェック（3つ）を更新 */
+export function updateSavedTextChecks(id, userId, checks) {
+  const [c1, c2, c3] = checks.map(v => (v ? 1 : 0));
+  return db.prepare(`
+    UPDATE saved_texts SET check1 = ?, check2 = ?, check3 = ?
+    WHERE id = ? AND user_id = ?
+  `).run(c1, c2, c3, id, userId);
+}
+
+/** 手動並べ替え: 表示順の id 配列を受け取り sort_order を振り直す */
+export const reorderSavedTexts = db.transaction((userId, ids) => {
+  const stmt = db.prepare(
+    'UPDATE saved_texts SET sort_order = ? WHERE id = ? AND user_id = ?'
+  );
+  ids.forEach((id, idx) => stmt.run(idx, id, userId));
+});
 
 export function deleteSavedText(id, userId) {
   return db.prepare(
